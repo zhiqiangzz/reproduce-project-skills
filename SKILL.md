@@ -1,6 +1,6 @@
 ---
 name: reproduce-project
-description: Reproduce, install, or set up a software project locally with a uv-managed .venv for Python, a generated pixi.toml that manages non-Python toolchain and system packages (CUDA, compilers, native libs) from conda-forge into a project-local .pixi/, VSCode .vscode (uv interpreter + Python+C++ joint LLDB debug compound), a project-local .env (project toolchains preferred over system), an editable idempotent reproduction script (scripts/reproduce.sh), the project's own example as the verification test, and (when a paper PDF exists) annotation of the paper's running example. Trigger phrases include "reproduce this project", "set up this repo", "install dependencies", "get it building", "replicate the paper".
+description: Reproduce, install, or set up a software project locally with a uv-managed .venv for Python, a generated pixi.toml that manages non-Python toolchain and system packages (CUDA, compilers, native libs) from conda-forge into a project-local .pixi/, VSCode .vscode (uv interpreter + Python+C++ joint LLDB debug compound), a project-local .env (project toolchains preferred over system), an editable idempotent reproduction script (scripts/reproduce.sh) that builds with load-aware parallelism (3/4 of idle cores, waits out a busy CPU) and gates GPU tests on GPU load, the project's own example as the verification test, and (when a paper PDF exists) annotation of the paper's running example. Trigger phrases include "reproduce this project", "set up this repo", "install dependencies", "get it building", "replicate the paper".
 ---
 
 # reproduce-project
@@ -15,6 +15,7 @@ Project-agnostic playbook for getting an arbitrary software project — especial
 2. **No unattended sudo.** If a step needs `sudo`, print the command and pause for the user.
 3. **Driver is sacred.** Never modify, downgrade, or reinstall the NVIDIA driver — assume no permission. The installed driver is a hard ceiling: pick a CUDA toolkit/runtime ≤ the driver-supported maximum. If the project's *minimum* required CUDA exceeds what the driver allows, **stop and report an error** — do not touch the driver and do not silently pick an incompatible version.
 8. **Version selection: newest-reasonable, not oldest-allowed, not bleeding-edge.** When a dependency (or the Python interpreter) is given as a range or floor (`python >= 3.11`, `llvm > 15`, `cmake >= 3.18`, `cudatoolkit > 11`), do NOT install the floor and do NOT install the absolute latest/nightly. Pick a recent, well-established stable release a notch or two below the newest — e.g. `python >=3.11` → use **3.12** (not 3.11, not a just-released 3.13); `llvm > 15` → `llvm 19`/`20` (not 15, not 21). Pin to the exact floor only when the constraint is truly hard (`==`, an upper bound, or a dep with no newer wheels). Always clamp to system constraints first (see rule 3).
+9. **Be a good neighbour on shared machines.** Build parallelism and GPU tests adapt to current load, never hog the box. **Compile:** if system-wide CPU ≥ 80% busy, wait for it to free up; then build with **3/4 of the currently-idle cores** (≥1). **GPU tests:** if GPU load is high, wait until it drops; if low, run immediately. The generated `scripts/reproduce.sh` implements this (`wait_for_cpu_idle` / `build_jobs_from_load` / `wait_for_gpu_idle`); thresholds and a `MAX_WAIT_SECS` cap are env-overridable.
 4. **`/usr/local/` is read-only.** Project-local toolchains go in `<project>/third_party/`.
 5. **Source code is read-only by default.** Wrap incompatible interfaces in a thin shim. Modify source only as a last resort, and never silently.
 6. **`scripts/reproduce.sh` is the artefact.** Every successful command is appended to it. On failure, the agent edits the script and re-runs — the script is idempotent.
@@ -178,11 +179,13 @@ bash scripts/reproduce.sh
 
 The script runs `pixi install` (materializing the `pixi.toml` toolchain into `.pixi/`) and sources `.env` *before* the native build, so `nvcc`, compilers, and native libs from `.pixi/` are on PATH/`CMAKE_PREFIX_PATH` for CMake.
 
-Build dispatch:
-- `CMakeLists.txt` present → `mkdir -p build && cd build && cmake .. && make -j$(nproc)`
+**Load-aware parallelism (Hard rule 9).** Before compiling, the script calls `wait_for_cpu_idle` — if system-wide CPU ≥ `BUSY_CPU_PCT` (default 80) it polls until the machine frees up (or `MAX_WAIT_SECS` elapses) — then sets `-j` to `build_jobs_from_load`: **3/4 of the cores that are currently idle** (≥1), not `nproc`. Replace any hard-coded `make -j$(nproc)` / `meson compile`'s implicit all-cores with `make -j"$BUILD_JOBS"` so build dispatch obeys the policy. The user can force a count with `BUILD_JOBS=<n>`.
+
+Build dispatch (all clamped to `$BUILD_JOBS`):
+- `CMakeLists.txt` present → `mkdir -p build && cd build && cmake .. && make -j"$BUILD_JOBS"`
 - `python/setup.py` (separate Python subdir) → `cd python && uv pip install -e .`
 - `pyproject.toml` / top-level `setup.py` → `uv pip install -e .`
-- `meson.build` → `meson setup build && meson compile -C build`
+- `meson.build` → `meson setup build && meson compile -C build -j "$BUILD_JOBS"`
 
 ### Phase 8 — Verify
 
@@ -190,6 +193,8 @@ Build dispatch:
 .venv/bin/python <simplest_example>
 echo $?   # must be 0
 ```
+
+**GPU-load gate (Hard rule 9).** If the verification example uses the GPU, set `VERIFY_USES_GPU=1` in `scripts/reproduce.sh` (fill the `__VERIFY_USES_GPU__` placeholder). The script then calls `wait_for_gpu_idle` first: high GPU load → wait until it drops below `GPU_BUSY_PCT` (default 30) or `MAX_WAIT_SECS` elapses; low load → run immediately. CPU-only examples skip the gate.
 
 If non-zero, capture stderr, patch `scripts/reproduce.sh` (add missing pkg, set missing env var, adjust CMake flag, etc.), re-run. Do not give up until verify passes or the user calls it.
 

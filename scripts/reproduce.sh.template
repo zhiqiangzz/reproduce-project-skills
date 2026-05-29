@@ -9,6 +9,90 @@ cd "$(dirname "$0")/.."
 log() { printf '[reproduce] %s\n' "$*"; }
 
 # ---------------------------------------------------------------------------
+# Resource-aware helpers — set BUILD_JOBS by current CPU load, and gate GPU
+# work on current GPU load. Override the policy with env vars if needed:
+#   BUSY_CPU_PCT (default 80)  — at/above this system-wide CPU%, wait to build.
+#   GPU_BUSY_PCT (default 30)  — at/above this GPU util%, wait before GPU tests.
+#   MAX_WAIT_SECS (default 1800), POLL_SECS (default 15)
+#   BUILD_JOBS=<n>             — skip CPU auto-detection entirely.
+# ---------------------------------------------------------------------------
+BUSY_CPU_PCT="${BUSY_CPU_PCT:-80}"
+GPU_BUSY_PCT="${GPU_BUSY_PCT:-30}"
+MAX_WAIT_SECS="${MAX_WAIT_SECS:-1800}"
+POLL_SECS="${POLL_SECS:-15}"
+NCORES="$(nproc)"
+
+# Instantaneous system-wide CPU utilization % (0-100), sampled over 1s.
+# Pure bash, two /proc/stat reads (no temp file, race-free). Clamped to [0,100].
+# /proc/stat "cpu" fields: user nice system idle iowait irq softirq [steal...].
+cpu_util_pct() {
+  local cpu u1 n1 s1 id1 w1 q1 sq1 rest u2 n2 s2 id2 w2 q2 sq2 t1 t2 dt di pct
+  read -r cpu u1 n1 s1 id1 w1 q1 sq1 rest < /proc/stat
+  t1=$((u1+n1+s1+id1+w1+q1+sq1))
+  sleep 1
+  read -r cpu u2 n2 s2 id2 w2 q2 sq2 rest < /proc/stat
+  t2=$((u2+n2+s2+id2+w2+q2+sq2))
+  dt=$((t2-t1)); di=$((id2-id1))
+  if [ "$dt" -le 0 ]; then printf 0; return; fi
+  pct=$(( (dt-di)*100/dt ))
+  [ "$pct" -lt 0 ] && pct=0
+  [ "$pct" -gt 100 ] && pct=100
+  printf '%d' "$pct"
+}
+
+# 3/4 of the cores currently IDLE (>=1). idle_cores = NCORES*(100-util)/100.
+build_jobs_from_load() {
+  local util idle_cores j
+  util="$(cpu_util_pct)"; util="${util:-0}"
+  idle_cores=$(( NCORES*(100-util)/100 ))
+  j=$(( idle_cores*3/4 ))
+  [ "$j" -lt 1 ] && j=1
+  printf '%d' "$j"
+}
+
+# Block until system-wide CPU% drops below BUSY_CPU_PCT (or MAX_WAIT_SECS elapses).
+wait_for_cpu_idle() {
+  local waited=0 util
+  while :; do
+    util="$(cpu_util_pct)"; util="${util:-0}"
+    if [ "$util" -lt "$BUSY_CPU_PCT" ]; then
+      log "CPU ${util}% (< ${BUSY_CPU_PCT}%); proceeding"; return 0
+    fi
+    if [ "$waited" -ge "$MAX_WAIT_SECS" ]; then
+      log "CPU still ${util}% after ${waited}s; proceeding anyway"; return 0
+    fi
+    log "CPU busy (${util}% >= ${BUSY_CPU_PCT}%); waiting ${POLL_SECS}s..."
+    sleep "$POLL_SECS"; waited=$((waited+POLL_SECS))
+  done
+}
+
+# Max GPU utilization % across all GPUs (0 if no nvidia-smi / no GPU).
+gpu_util_pct() {
+  command -v nvidia-smi >/dev/null 2>&1 || { printf 0; return; }
+  local m
+  m="$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null \
+        | awk 'BEGIN{m=0} {g=$1+0; if(g>m)m=g} END{print m}')"
+  printf '%d' "${m:-0}"
+}
+
+# Block until GPU load drops below GPU_BUSY_PCT (or MAX_WAIT_SECS elapses).
+# Low load -> returns immediately; high load -> polls until the GPU frees up.
+wait_for_gpu_idle() {
+  local waited=0 g
+  while :; do
+    g="$(gpu_util_pct)"; g="${g:-0}"
+    if [ "$g" -lt "$GPU_BUSY_PCT" ]; then
+      log "GPU ${g}% (< ${GPU_BUSY_PCT}%); proceeding"; return 0
+    fi
+    if [ "$waited" -ge "$MAX_WAIT_SECS" ]; then
+      log "GPU still ${g}% after ${waited}s; proceeding anyway"; return 0
+    fi
+    log "GPU busy (${g}% >= ${GPU_BUSY_PCT}%); waiting ${POLL_SECS}s..."
+    sleep "$POLL_SECS"; waited=$((waited+POLL_SECS))
+  done
+}
+
+# ---------------------------------------------------------------------------
 # Step 0 — Ensure `uv` (Python deps) and `pixi` (non-Python toolchain) on PATH.
 # ---------------------------------------------------------------------------
 export PATH="$HOME/.local/bin:$HOME/.pixi/bin:$PATH"
@@ -79,10 +163,15 @@ fi
 # ---------------------------------------------------------------------------
 # Step 6 — Native build (delete this block for pure-Python projects).
 # Uses the pixi-provided compilers / CUDA when pixi.toml declares them.
+# Resource policy: if the system is busy (CPU% >= BUSY_CPU_PCT) wait for it to
+# free up, then build with 3/4 of the currently-idle cores (>=1).
 # ---------------------------------------------------------------------------
 if [ -f CMakeLists.txt ]; then
+  wait_for_cpu_idle
+  BUILD_JOBS="${BUILD_JOBS:-$(build_jobs_from_load)}"
+  log "building with -j${BUILD_JOBS} (of ${NCORES} cores)"
   mkdir -p build
-  ( cd build && cmake .. && make -j"$(nproc)" )
+  ( cd build && cmake .. && make -j"$BUILD_JOBS" )
 fi
 
 # ---------------------------------------------------------------------------
@@ -97,8 +186,12 @@ fi
 # ---------------------------------------------------------------------------
 # Step 8 — Verification. Exit 0 here = skill succeeded.
 # Override the example path via:  VERIFY_EXAMPLE=examples/foo.py bash scripts/reproduce.sh
+# If the example uses the GPU, set VERIFY_USES_GPU=1 so we wait for the GPU to
+# be idle before testing (avoids contending with other jobs / skewed results).
 # ---------------------------------------------------------------------------
 VERIFY_EXAMPLE="${VERIFY_EXAMPLE:-examples/__SIMPLEST_EXAMPLE__}"
+VERIFY_USES_GPU="${VERIFY_USES_GPU:-__VERIFY_USES_GPU__}"   # AGENT FILLS: 1 if GPU test, else 0
+case "$VERIFY_USES_GPU" in 1|true|yes) wait_for_gpu_idle ;; esac
 log "verifying with $VERIFY_EXAMPLE"
 .venv/bin/python "$VERIFY_EXAMPLE"
 log "reproduce: OK"

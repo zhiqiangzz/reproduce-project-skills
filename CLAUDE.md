@@ -67,7 +67,8 @@ These are load-bearing — changing one asset usually requires updating `SKILL.m
    no unattended `sudo` (print and pause); NVIDIA driver untouched, CUDA toolkit ≤ driver cap
    (driver 570 → ≤ 12.8) and error out if the project floor exceeds it; version selection is
    newest-reasonable (not the floor, not bleeding-edge) clamped to system caps;
-   `/usr/local` read-only (toolchains go in `.pixi/` or `<project>/third_party/`); source code
-   read-only by default (shim, don't patch); the generated `scripts/reproduce.sh` is the idempotent
-   artifact that every successful command lands in; `.env` is gitignored. Don't weaken without intent.
+   load-aware builds (wait out CPU ≥80%, then `-j` = 3/4 of idle cores) and GPU-load-gated
+   tests; `/usr/local` read-only (toolchains go in `.pixi/` or `<project>/third_party/`); source
+   code read-only by default (shim, don't patch); the generated `scripts/reproduce.sh` is the
+   idempotent artifact that every successful command lands in; `.env` is gitignored. Don't weaken without intent.
 6. **Verification = the target project's own example**, run to exit code 0 — not a synthetic test.
