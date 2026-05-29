@@ -102,6 +102,8 @@ A manifest usually gives a **constraint**, not the version to install. Resolve i
 
 | Constraint | System cap | Pick |
 |---|---|---|
+| `requires-python >= 3.11` | — | `3.12` (not 3.11, not a just-released 3.13) |
+| `requires-python == 3.10` / `>=3.10,<3.11` | — | `3.10` (hard pin — honor it) |
 | `llvm > 15` | — | `llvm 19`/`20` (not 15, not a brand-new 21) |
 | `cudatoolkit > 11` | driver 570 → ≤ 12.8 | `12.6` (12.8 only if a dep demands it) |
 | project needs CUDA `> 13` | driver 570 → ≤ 12.8 | **ERROR** — driver too old, no permission to change |

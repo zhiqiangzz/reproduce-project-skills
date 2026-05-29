@@ -14,7 +14,7 @@ Project-agnostic playbook for getting an arbitrary software project — especial
 1. **uv-first for Python, pixi for everything else.** Python → project-local `.venv` via uv. Non-Python toolchain (CUDA, compilers, native libs) → project-local `.pixi/` via `pixi.toml`/conda-forge. Never pollute the system Python and never create a global conda/mamba env.
 2. **No unattended sudo.** If a step needs `sudo`, print the command and pause for the user.
 3. **Driver is sacred.** Never modify, downgrade, or reinstall the NVIDIA driver — assume no permission. The installed driver is a hard ceiling: pick a CUDA toolkit/runtime ≤ the driver-supported maximum. If the project's *minimum* required CUDA exceeds what the driver allows, **stop and report an error** — do not touch the driver and do not silently pick an incompatible version.
-8. **Version selection: newest-reasonable, not oldest-allowed, not bleeding-edge.** When a dependency is given as a range or floor (`llvm > 15`, `cmake >= 3.18`, `cudatoolkit > 11`), do NOT install the floor (`15`) and do NOT install the absolute latest/nightly. Pick a recent, well-established stable release a notch or two below the newest — e.g. `llvm > 15` → install `llvm 19`/`20`, not `15` and not a just-released `21`. Always clamp to system constraints first (see rule 3).
+8. **Version selection: newest-reasonable, not oldest-allowed, not bleeding-edge.** When a dependency (or the Python interpreter) is given as a range or floor (`python >= 3.11`, `llvm > 15`, `cmake >= 3.18`, `cudatoolkit > 11`), do NOT install the floor and do NOT install the absolute latest/nightly. Pick a recent, well-established stable release a notch or two below the newest — e.g. `python >=3.11` → use **3.12** (not 3.11, not a just-released 3.13); `llvm > 15` → `llvm 19`/`20` (not 15, not 21). Pin to the exact floor only when the constraint is truly hard (`==`, an upper bound, or a dep with no newer wheels). Always clamp to system constraints first (see rule 3).
 4. **`/usr/local/` is read-only.** Project-local toolchains go in `<project>/third_party/`.
 5. **Source code is read-only by default.** Wrap incompatible interfaces in a thin shim. Modify source only as a last resort, and never silently.
 6. **`scripts/reproduce.sh` is the artefact.** Every successful command is appended to it. On failure, the agent edits the script and re-runs — the script is idempotent.
@@ -53,8 +53,13 @@ For every versioned dependency, record the **constraint** (floor/range/pin), not
 ### Phase 2 — venv + pyproject.toml + Python deps
 
 ```bash
-uv venv --python 3.11   # falls back to 3.10 / 3.12 if a discovered pin demands it
+uv venv --python 3.12   # newest-reasonable default; see version rule below
 ```
+
+**Choosing the Python version (Hard rule 8 applies).** Treat `requires-python` as a *constraint*, not a pin:
+- A floor like `>=3.11` is **not** a demand for 3.11 — pick the newest-reasonable interpreter that satisfies it: prefer **3.12** (recent, actively maintained), not 3.11 and not a just-released 3.13/nightly.
+- Only pin to an exact version when the project genuinely requires it (`==3.10`, `requires-python = ">=3.10,<3.11"`, or a dep with no wheels above some version) — then `uv venv --python 3.10`.
+- If a discovered dep has no wheel for the chosen version, step down one minor until it resolves.
 
 **Root `pyproject.toml` (create if missing).** This becomes the single declarative source of truth for Python deps — `scripts/reproduce.sh` installs from it via `uv pip install -r pyproject.toml` instead of duplicating the list. If the root already has a `pyproject.toml`, leave it alone (the user may have configured it).
 
@@ -63,7 +68,7 @@ if [ ! -f pyproject.toml ]; then
   cp "$SKILL_DIR/templates/pyproject.toml" pyproject.toml
   # Fill the placeholders:
   #   __PROJECT_NAME__   → derived from the directory name (kebab-case)
-  #   __PYTHON_VERSION__ → 3.11 (or the discovered minimum)
+  #   __PYTHON_VERSION__ → the version uv venv actually used (newest-reasonable, e.g. 3.12)
   # Then append the Phase-1 discovered deps under [project].dependencies.
 fi
 ```
@@ -128,7 +133,7 @@ sed -i "s|__TEST_PROGRAM__|<example_path>|" .vscode/launch.json
 if [ ! -f pyrightconfig.json ]; then
   cp "$SKILL_DIR/templates/pyrightconfig.json" pyrightconfig.json
   # Fill placeholders:
-  #   __PYTHON_VERSION__ → 3.11 (or whatever uv venv used)
+  #   __PYTHON_VERSION__ → whatever uv venv actually used (newest-reasonable, e.g. 3.12)
   #   __EXTRA_PATHS__    → list of subdirs containing top-level packages
 fi
 ```

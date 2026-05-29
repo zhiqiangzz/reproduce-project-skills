@@ -24,10 +24,13 @@ export PATH="$HOME/.local/bin:$HOME/.pixi/bin:$PATH"
 
 # ---------------------------------------------------------------------------
 # Step 1 — Project Python venv. `uv venv` is a no-op when .venv already exists.
+# Version policy: newest-reasonable that satisfies the project's requires-python
+# floor (a floor like >=3.11 is NOT a demand for 3.11). The skill fills the value
+# below; pin to an exact minor only when the project genuinely requires it.
 # ---------------------------------------------------------------------------
 if [ ! -d .venv ]; then
-  log "creating .venv with Python 3.11"
-  uv venv --python 3.11
+  log "creating .venv with Python 3.12"
+  uv venv --python 3.12
 fi
 
 # ---------------------------------------------------------------------------
