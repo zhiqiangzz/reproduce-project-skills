@@ -1,0 +1,26 @@
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+*.code-workspace
+
+# --- Temp / scratch ---
+tmp/
+temp/
+*.tmp
+*.log
+*.bak
+*.orig
+draft.txt
+
+# --- Python (in case anything is generated in this repo) ---
+__pycache__/
+*.py[cod]
+.venv/
+.pixi/
+
+# --- Local environment ---
+.env

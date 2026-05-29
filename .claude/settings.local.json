@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk 'NF' SKILL.md)",
+      "Bash(sed -n '45,372p' SKILL.md)",
+      "Read(//tmp/**)",
+      "Bash(grep -n '.' SKILL.md)",
+      "Bash(echo \"exit=$?\")"
+    ]
+  }
+}

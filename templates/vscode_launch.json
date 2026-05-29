@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Launch Test",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/__TEST_PROGRAM__",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    {
+      "name": "LLDB: Attach to Python",
+      "type": "lldb",
+      "request": "attach",
+      "pid": "${command:pickMyProcess}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Python + C++ (joint)",
+      "configurations": ["Python: Launch Test", "LLDB: Attach to Python"],
+      "stopAll": true
+    }
+  ]
+}

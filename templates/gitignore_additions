@@ -1,0 +1,10 @@
+# --- reproduce-project skill additions ---
+.venv/
+.pixi/
+build/
+third_party/cuda/
+*.egg-info/
+__pycache__/
+.env
+scripts/reproduce.log
+.vscode/*.log
