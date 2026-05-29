@@ -22,8 +22,12 @@ platforms = ["linux-64"]
 # ffmpeg = "*"
 
 # --- CUDA toolchain (uncomment when the native build needs nvcc; see SKILL.md Phase 4) ---
-# Pin cuda-version to the HIGHEST value <= the driver-supported CUDA.
-# cuda-version = "12.4"
+# Version policy: pick the NEWEST-REASONABLE cuda-version that satisfies the project
+# floor AND is <= the driver cap — not the floor, not bleeding-edge, a notch below the cap.
+# Driver cap examples: driver >=560 -> 12.6, >=570 -> 12.8. So on a 570 driver with a
+# "cudatoolkit > 11" project, choose 12.6 (12.8 only if a dep needs it). If the project's
+# FLOOR exceeds the cap (e.g. needs >13 on a 570 driver), DO NOT install here — error out.
+# cuda-version = "12.6"
 # cuda-toolkit = "*"
 # cudnn = "*"
 # gxx = "*"          # conda-forge C++ compiler matched to the CUDA toolkit

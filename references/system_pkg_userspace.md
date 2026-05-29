@@ -64,10 +64,16 @@ Never run sudo unattended. Print the exact command and let the user decide.
 
 ## CUDA-specific notes
 
-- PREFERRED: declare the toolkit in `pixi.toml` — `cuda-version` pinned to the highest
-  value ≤ the driver-supported CUDA, plus `cuda-toolkit`, `cudnn`, and a matching `gxx`,
-  with `[system-requirements] cuda = "<major>"`. `pixi install` places `nvcc` and the CUDA
-  libs in `.pixi/envs/default`; the skill's `.env` then sets `CUDA_HOME` there.
+- The driver is a HARD CEILING (`nvidia-smi`). Driver→max-toolkit: `≥550`→12.4, `≥560`→12.6,
+  `≥570`→12.8, `≥575`→12.9/13.x. Never modify/downgrade the driver.
+- Pick the **newest-reasonable** toolkit in `[project-floor, driver-cap]` — not the floor, not
+  bleeding-edge, a notch below the cap. E.g. driver 570 (cap 12.8) + `cudatoolkit > 11` → 12.6.
+- **If the project's floor exceeds the cap** (e.g. needs `> 13` on a 570 driver): STOP and
+  report an error; the user lacks permission to upgrade the driver. Don't pick a lower version.
+- PREFERRED: declare that resolved version in `pixi.toml` — `cuda-version = "12.6"`, plus
+  `cuda-toolkit`, `cudnn`, and a matching `gxx`, with `[system-requirements] cuda = "<major>"`.
+  `pixi install` places `nvcc` and the CUDA libs in `.pixi/envs/default`; the skill's `.env`
+  then sets `CUDA_HOME` there.
 - FALLBACK (a needed component isn't on conda-forge): download the runfile,
   `--toolkit --toolkitpath=<project>/third_party/cuda --silent --override --no-man-page`.
   No driver install.

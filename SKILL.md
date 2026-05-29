@@ -13,7 +13,8 @@ Project-agnostic playbook for getting an arbitrary software project — especial
 
 1. **uv-first for Python, pixi for everything else.** Python → project-local `.venv` via uv. Non-Python toolchain (CUDA, compilers, native libs) → project-local `.pixi/` via `pixi.toml`/conda-forge. Never pollute the system Python and never create a global conda/mamba env.
 2. **No unattended sudo.** If a step needs `sudo`, print the command and pause for the user.
-3. **Driver is sacred.** Do not modify the NVIDIA driver. Pick a CUDA runtime ≤ the driver-supported version.
+3. **Driver is sacred.** Never modify, downgrade, or reinstall the NVIDIA driver — assume no permission. The installed driver is a hard ceiling: pick a CUDA toolkit/runtime ≤ the driver-supported maximum. If the project's *minimum* required CUDA exceeds what the driver allows, **stop and report an error** — do not touch the driver and do not silently pick an incompatible version.
+8. **Version selection: newest-reasonable, not oldest-allowed, not bleeding-edge.** When a dependency is given as a range or floor (`llvm > 15`, `cmake >= 3.18`, `cudatoolkit > 11`), do NOT install the floor (`15`) and do NOT install the absolute latest/nightly. Pick a recent, well-established stable release a notch or two below the newest — e.g. `llvm > 15` → install `llvm 19`/`20`, not `15` and not a just-released `21`. Always clamp to system constraints first (see rule 3).
 4. **`/usr/local/` is read-only.** Project-local toolchains go in `<project>/third_party/`.
 5. **Source code is read-only by default.** Wrap incompatible interfaces in a thin shim. Modify source only as a last resort, and never silently.
 6. **`scripts/reproduce.sh` is the artefact.** Every successful command is appended to it. On failure, the agent edits the script and re-runs — the script is idempotent.
@@ -46,6 +47,8 @@ Read-only parse, in this priority order. See `$SKILL_DIR/references/dep_discover
 6. `CMakeLists.txt`, `Makefile`, `meson.build`, `Cargo.toml`, `go.mod`
 
 Emit a structured plan: `{python_pkgs[], system_pkgs[], cuda_required: bool, cuda_min_version, build_tool, simplest_example_path}`.
+
+For every versioned dependency, record the **constraint** (floor/range/pin), not a single number — Phase 2/3/4 resolve each to a concrete version per the version-selection rule (Hard rule 8): newest-reasonable that satisfies the constraint and the system caps, never the floor, never bleeding-edge.
 
 ### Phase 2 — venv + pyproject.toml + Python deps
 
@@ -90,12 +93,22 @@ For each system package discovered:
 ### Phase 4 — CUDA
 
 ```bash
-DRIVER_MAX=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
-# Map driver -> max CUDA runtime via the NVIDIA compatibility table.
+DRIVER_VER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
+# Map driver -> MAX supported CUDA toolkit via the NVIDIA compatibility table.
 ```
 
-- Python GPU wheels (`torch`, `onnxruntime-gpu`, `cupy-cuda12x`, `jax[cuda12]`): pick the highest wheel index `≤` driver-supported, installed via uv.
-- If the project's C++ build needs `nvcc`: **declare the toolkit in `pixi.toml`** — set `cuda-version` to the highest value `≤` driver-supported, add `cuda-toolkit`, `cudnn`, and a matching `gxx`, and set `[system-requirements] cuda = "<major>"`. `pixi install` puts `nvcc` and the CUDA libs in `.pixi/envs/default`. **Do not** write to `/usr/local`.
+**Driver → max-toolkit (the hard ceiling).** The driver version caps the CUDA toolkit, regardless of what the project asks for. Reference points (driver `≥` → max CUDA toolkit):
+- `≥ 525` → 12.0,  `≥ 535` → 12.2,  `≥ 545` → 12.3,  `≥ 550` → 12.4,  `≥ 555` → 12.5,  `≥ 560` → 12.6,  `≥ 570` → 12.8,  `≥ 575`/580 → 12.9/13.x.
+- Example: **driver 570** → toolkit must be `≤ 12.8`. There is no 13.x option on this driver.
+
+**Resolution algorithm** (combine project constraint + driver cap + Hard rule 8):
+1. Let `CAP` = max toolkit the driver supports (table above). For driver 570, `CAP = 12.8`.
+2. Let `FLOOR` = the project's minimum required CUDA (e.g. `cudatoolkit > 11` → floor 11).
+3. **If `FLOOR > CAP`** (e.g. project requires toolkit `> 13` but driver 570 caps at 12.8): **STOP — print an error and exit.** Do not touch the driver, do not pick a lower version silently. Tell the user the project needs a newer driver than they have permission to install.
+4. Otherwise pick the **newest-reasonable** version in `[FLOOR, CAP]` per Hard rule 8 — not the floor, and back off slightly from the very top. For driver 570 + `cudatoolkit > 11`, choose **12.6** (a notch below the 12.8 cap); 12.8 is acceptable if a dep needs it.
+
+- Python GPU wheels (`torch`, `onnxruntime-gpu`, `cupy-cuda12x`, `jax[cuda12]`): pick the wheel index matching the resolved toolkit (e.g. `cu126`), installed via uv.
+- If the project's C++ build needs `nvcc`: **declare the toolkit in `pixi.toml`** — set `cuda-version` to the resolved version (e.g. `12.6`), add `cuda-toolkit`, `cudnn`, and a matching `gxx`, and set `[system-requirements] cuda = "<major>"`. `pixi install` puts `nvcc` and the CUDA libs in `.pixi/envs/default`. **Do not** write to `/usr/local`.
 - **Fallback** (a needed CUDA component isn't on conda-forge): download the runfile into `<project>/third_party/cuda/` using `--silent --toolkit --toolkitpath=$PWD/third_party/cuda --override --no-man-page`.
 - The generated `.env` sets `CUDA_HOME` to the pixi env (or the `third_party/cuda` fallback) automatically.
 

@@ -17,7 +17,7 @@ How to extract a structured dependency plan from common manifest files. Read the
 
 | Line pattern | Output bucket |
 |---|---|
-| `FROM nvidia/cuda:X.Y-...` | `cuda_min_version=X.Y`, `cuda_required=true` |
+| `FROM nvidia/cuda:X.Y-...` | `cuda_min_version=X.Y` (a FLOOR, not a pin), `cuda_required=true` — resolve to newest-reasonable ≤ driver cap in Phase 4 |
 | `apt-get install -y <pkgs>` | `system_pkgs` — try uv pip first, else add to `pixi.toml` (see `system_pkg_userspace.md`) |
 | `conda install ... <pkgs>` | split by language: Python names (`cython numpy onnx protobuf`) → `pyproject.toml` (uv); native tools/libs (`cmake make ffmpeg cudatoolkit`) → `pixi.toml` (pixi) |
 | `pip install <pkgs>` | `python_pkgs` directly |
@@ -87,6 +87,24 @@ Common mismatches the agent should resolve before `uv pip install`:
 | `onnx` | `onnx` (same) |
 | `cython` | `Cython` (case-insensitive on pip) |
 | `tensorflow` | `tensorflow` or `tensorflow-cpu` or `tensorflow-gpu` (legacy) — pick based on Phase 4 CUDA detection |
+
+## Version selection (resolving a constraint to a concrete version)
+
+A manifest usually gives a **constraint**, not the version to install. Resolve it with:
+
+1. Read the constraint as a floor/range (`llvm > 15`, `cmake >= 3.18`, `cudatoolkit > 11`).
+2. Clamp to system caps first — most importantly the NVIDIA **driver → max CUDA toolkit**
+   ceiling (driver 570 → ≤ 12.8). See `system_pkg_userspace.md`.
+3. If the floor is above the cap, **error out** (e.g. needs CUDA > 13 on a 570 driver) — do
+   not downgrade the driver, do not silently pick something incompatible.
+4. Otherwise pick **newest-reasonable**: a recent, established stable release a notch or two
+   below the latest — never the floor, never a nightly/just-released major.
+
+| Constraint | System cap | Pick |
+|---|---|---|
+| `llvm > 15` | — | `llvm 19`/`20` (not 15, not a brand-new 21) |
+| `cudatoolkit > 11` | driver 570 → ≤ 12.8 | `12.6` (12.8 only if a dep demands it) |
+| project needs CUDA `> 13` | driver 570 → ≤ 12.8 | **ERROR** — driver too old, no permission to change |
 
 ## Simplest example detection (for Phase 8 verify)
 

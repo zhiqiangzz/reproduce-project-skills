@@ -64,7 +64,9 @@ These are load-bearing — changing one asset usually requires updating `SKILL.m
    conda-forge (into `.pixi/`). No global conda/mamba env; CUDA via pixi, runfile only as a
    fallback. Both are project-local.
 5. **The "Hard rules" in `SKILL.md` are the skill's contract.** uv-first / project-local `.venv`;
-   no unattended `sudo` (print and pause); NVIDIA driver untouched, CUDA runtime ≤ driver-supported;
+   no unattended `sudo` (print and pause); NVIDIA driver untouched, CUDA toolkit ≤ driver cap
+   (driver 570 → ≤ 12.8) and error out if the project floor exceeds it; version selection is
+   newest-reasonable (not the floor, not bleeding-edge) clamped to system caps;
    `/usr/local` read-only (toolchains go in `.pixi/` or `<project>/third_party/`); source code
    read-only by default (shim, don't patch); the generated `scripts/reproduce.sh` is the idempotent
    artifact that every successful command lands in; `.env` is gitignored. Don't weaken without intent.
